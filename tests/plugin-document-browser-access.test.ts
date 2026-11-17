@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
-import { NextRequest } from "next/server";
-import { proxy } from "../proxy.ts";
+import { NextRequest, type NextResponse } from "next/server";
+import { proxy as proxyEntry } from "../proxy.ts";
+
+/** Local modes return synchronously (remote mode is tested in remote-access.test.ts). */
+const proxy = (request: NextRequest) => proxyEntry(request) as NextResponse;
 import { createPluginDocumentRoute } from "../src/server/plugin-transport.ts";
 
 it("streamed document route shares browser policy before params, plugin work or multipart body access", async t => {

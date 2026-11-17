@@ -1,11 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-import { NextRequest } from "next/server";
+import { NextRequest, type NextResponse } from "next/server";
 // Installed Next 16.3.2 retains the old test-helper export despite proxy.md's new name.
 import { unstable_doesMiddlewareMatch as unstable_doesProxyMatch } from "next/experimental/testing/server";
 import { desktopAPIAuthorized } from "../src/server/desktop-access.ts";
-import { proxy, config } from "../proxy.ts";
+import { proxy as proxyEntry, config } from "../proxy.ts";
+
+/** Local modes return synchronously (remote mode is tested in remote-access.test.ts). */
+const proxy = (request: NextRequest) => proxyEntry(request) as NextResponse;
 import { browserServiceSpawnEnv } from "../src/agent/subagents/headless.ts";
 const require = createRequire(import.meta.url);
 const { desktopAPIHeaders, HEADER } = require("../electron/desktop-api.cjs");
@@ -53,7 +56,9 @@ test("all methods fail closed for desktop missing/wrong secret; API-only matcher
 	}
 	assert(desktopAPIAuthorized(new Headers({ [HEADER]: secret }), { LH_DESKTOP_SERVER: "1", LH_DESKTOP_API_SECRET: secret }));
 	for (const pathname of ["/api/events", "/api/chat", "/api/settings/models", "/api/chats/scratch/markdown"]) assert(unstable_doesProxyMatch({ config, nextConfig: {}, url: origin + pathname }));
-	assert(!unstable_doesProxyMatch({ config, nextConfig: {}, url: origin + "/chat/new" }));
+	// Fork: pages reach Proxy for remote server mode; local modes pass them through in proxy().
+	assert(unstable_doesProxyMatch({ config, nextConfig: {}, url: origin + "/chat/new" }));
+	assert(!unstable_doesProxyMatch({ config, nextConfig: {}, url: origin + "/api/health" }));
 	const originalMarker = process.env.LH_DESKTOP_SERVER;
 	const originalSecret = process.env.LH_DESKTOP_API_SECRET;
 	try {

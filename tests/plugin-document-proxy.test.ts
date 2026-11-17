@@ -3,12 +3,15 @@ import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
 import { it } from "node:test";
 import { getCloneableBody } from "next/dist/server/body-streams.js";
-import { NextRequest } from "next/server";
+import { NextRequest, type NextResponse } from "next/server";
 // Installed Next retains this name for its Proxy matcher test helper.
 import { unstable_doesMiddlewareMatch as unstable_doesProxyMatch } from "next/experimental/testing/server";
-import { config, proxy } from "../proxy.ts";
+import { config, proxy as proxyEntry } from "../proxy.ts";
 import { createPluginDocumentConverter, MAX_DOCUMENT_BODY_BYTES } from "../src/server/plugin-documents.ts";
 import { createPluginDocumentRoute, createPluginTransport } from "../src/server/plugin-transport.ts";
+
+/** Local modes return synchronously (remote mode is tested in remote-access.test.ts). */
+const proxy = (request: NextRequest) => proxyEntry(request) as NextResponse;
 
 const origin = "http://localhost";
 const documentPath = "/api/plugins/document-one/documents/markdown";
@@ -39,8 +42,30 @@ it("Proxy retains API roots, siblings, endpoint lookalikes and all other API rou
 		"/api/plugins/document-one/other/documents/markdown", "/api/plugins/documents/markdown",
 		"/api/graph/import", "/api/events", "/api/chat", "/api/settings/models", "/api/chats/scratch/markdown",
 	]) assert.equal(proxyMatches(path), true, path);
+	// Fork: pages also reach Proxy so remote server mode can gate them with the
+	// Cloudflare Access JWT; local modes let non-API paths through in proxy().
 	for (const path of ["/", "/chat/new", "/apix", "/api-other/plugins/document-one/documents/markdown"]) {
+		assert.equal(proxyMatches(path), true, path);
+	}
+	for (const path of ["/api/health", "/_next/static/chunks/app.js", "/favicon.ico"]) {
 		assert.equal(proxyMatches(path), false, path);
+	}
+	for (const path of ["/api/health/x", "/api/healthz", "/_next/data/x.json"]) {
+		assert.equal(proxyMatches(path), true, path);
+	}
+});
+
+it("local modes let page paths through Proxy unchanged", () => {
+	const saved = process.env.LH_SERVER_MODE;
+	delete process.env.LH_SERVER_MODE;
+	try {
+		for (const path of ["/", "/chat/new", "/apix"]) {
+			const response = proxy(new NextRequest(new URL(path, "http://rebind.attacker.example")));
+			assert.ok(!(response instanceof Promise), path);
+			assert.equal(response.headers.get("x-middleware-next"), "1", path);
+		}
+	} finally {
+		if (saved !== undefined) process.env.LH_SERVER_MODE = saved;
 	}
 });
 

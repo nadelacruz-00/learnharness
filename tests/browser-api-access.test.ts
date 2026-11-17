@@ -6,8 +6,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
-import { NextRequest } from "next/server";
-import { proxy } from "../proxy.ts";
+import { NextRequest, type NextResponse } from "next/server";
+import { proxy as proxyEntry } from "../proxy.ts";
+
+/** Local modes return synchronously (remote mode is tested in remote-access.test.ts). */
+const proxy = (request: NextRequest) => proxyEntry(request) as NextResponse;
 import { browserAPIRefusal, browserHostAllowed, browserOnlyMode } from "../src/server/desktop-access.ts";
 
 const secret = "a".repeat(64);

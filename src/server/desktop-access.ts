@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
+import { remotePublicOrigin } from "./remote-access.ts";
 
 /** Browser-only mode: `next dev` / `next start` without the desktop shell's
  * per-launch secret. */
@@ -28,6 +29,10 @@ export function desktopAPIAuthorized(
  * retains the existing shared-server/API-key trust model. Never trust forwarded
  * origins or add CORS grants here. A public deployment needs its own access gate. */
 export function subscriptionRequestOrigin(request: Request): string | undefined {
+	// Remote mode (fork): the container sees http behind the tunnel; the
+	// browser's origin is the pinned public https origin.
+	const pinned = remotePublicOrigin();
+	if (pinned) return pinned;
 	try {
 		const url = new URL(request.url);
 		const host = request.headers.get("host") ?? url.host;
@@ -51,6 +56,8 @@ export function browserHostAllowed(host: string | null, env: Record<string, stri
 	if (hostname === "localhost" || hostname.endsWith(".localhost")) return true;
 	if (isIP(hostname.replace(/^\[|\]$/g, "")) !== 0) return true;
 	const allowed = (env.LH_ALLOWED_HOSTS ?? "").split(",").map((name) => name.trim().toLowerCase()).filter(Boolean);
+	const pinned = remotePublicOrigin(env);
+	if (pinned) allowed.push(new URL(pinned).hostname.toLowerCase());
 	return allowed.includes(hostname);
 }
 
