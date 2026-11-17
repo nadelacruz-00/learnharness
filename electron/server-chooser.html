@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LearnHarness server</title>
+<style>
+	:root { --bg: #f7f6f3; --fg: #1d1c1a; --muted: #6b6862; --card: #ffffff; --line: #dcd9d2; --accent: #2f5bd3; --bad: #b3261e; --good: #1e7a3a; color-scheme: light dark; }
+	@media (prefers-color-scheme: dark) { :root { --bg: #161615; --fg: #ecebe8; --muted: #a29f98; --card: #201f1d; --line: #3a3835; --accent: #7a9cff; --bad: #ff8a80; --good: #7bd88f; } }
+	* { box-sizing: border-box; }
+	body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, sans-serif; }
+	main { max-width: 520px; margin: 0 auto; padding: 28px 20px; }
+	h1 { font-size: 20px; margin: 0 0 4px; }
+	p.lead { color: var(--muted); margin: 0 0 20px; }
+	fieldset { border: 1px solid var(--line); background: var(--card); border-radius: 10px; padding: 14px 16px; margin: 0 0 14px; }
+	legend { padding: 0 6px; font-weight: 600; }
+	label.choice { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; cursor: pointer; }
+	label.choice small { display: block; color: var(--muted); }
+	.field { display: grid; gap: 4px; margin: 10px 0; }
+	.field span { font-weight: 500; }
+	input[type=text], input[type=url], input[type=password] { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit; }
+	.hint { color: var(--muted); font-size: 12px; }
+	.row { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; margin-top: 16px; }
+	button { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); font: inherit; cursor: pointer; }
+	button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+	button:disabled { opacity: .6; cursor: default; }
+	#status { min-height: 1.5em; margin-top: 12px; }
+	#status.bad { color: var(--bad); }
+	#status.good { color: var(--good); }
+	#remote[hidden] { display: none; }
+</style>
+</head>
+<body>
+<main>
+	<h1>Where is your learning data?</h1>
+	<p class="lead">LearnHarness can run on this computer, or connect to your own LearnHarness server so the same sessions are on all your devices.</p>
+	<form id="form" autocomplete="off">
+		<fieldset>
+			<legend>Mode</legend>
+			<label class="choice"><input type="radio" name="mode" value="local"> <span>This computer<small>Data stays in this app's folder. Works offline.</small></span></label>
+			<label class="choice"><input type="radio" name="mode" value="remote"> <span>LearnHarness server<small>Sessions and the knowledge graph live on the server.</small></span></label>
+		</fieldset>
+		<fieldset id="remote">
+			<legend>Server</legend>
+			<label class="field"><span>Server address</span><input id="url" type="url" placeholder="https://learn.example.com" spellcheck="false"></label>
+			<label class="field"><span>Cloudflare Access client ID</span><input id="clientId" type="text" placeholder="….access" spellcheck="false"></label>
+			<label class="field"><span>Cloudflare Access client secret</span><input id="secret" type="password" spellcheck="false"><span class="hint" id="secretHint"></span></label>
+		</fieldset>
+		<div id="status" role="status"></div>
+		<div class="row">
+			<button type="button" id="cancel">Cancel</button>
+			<button type="button" id="test">Test connection</button>
+			<button type="submit" class="primary" id="save">Save and restart</button>
+		</div>
+	</form>
+</main>
+<script src="server-chooser.js"></script>
+</body>
+</html>

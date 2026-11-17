@@ -84,6 +84,10 @@ files:
   # Main-process ID-token signature verification (no bundled OAuth implementation).
   - node_modules/jose/**/*
 extraResources:
+  # Fork (remote server mode): "Copy Local Data to Server…" builds the archive
+  # in the main process with the same module the server's import route uses.
+  - from: src/server/data-archive.mjs
+    to: data-archive.mjs
   # Attribution/license for the bounded local Pi cutoff-selector port.
   - from: docs/compaction-accounting.md
     to: licenses/pi-compaction.md
@@ -188,7 +192,9 @@ publish:
   # would be a leak. desktop:dist passes no --publish flag, so builds never
   # upload; publishing happens at release time (GH_TOKEN + --publish).
   - provider: github
-    owner: amosblomqvist
+    # Fork: update only from the fork's own releases, never from upstream
+    # (an upstream build would drop remote server mode).
+    owner: nadelacruz-00
     repo: learnharness
     # All three CI jobs contribute assets; only the owner publishes it.
     releaseType: draft

@@ -25,6 +25,7 @@
  */
 
 const { app, BrowserWindow, Menu, ipcMain, nativeTheme, session, shell, dialog } = require("electron");
+const { remoteAccessHeaders, probeServer } = require("./remote-headers.cjs");
 const { pickAttachmentPath } = require("./attachment-picker.cjs");
 const { createChatGPT, fileStore } = require("./chatgpt.cjs");
 const { attachChatGPTChild, trustedSender, chatGPTControl } = require("./chatgpt-ipc.cjs");
@@ -317,6 +318,13 @@ function openExternalLink(target) {
  *  - will-navigate pinned to the app origin; window.open always denied —
  *    external links go to the real browser via shell.openExternal, for
  *    http, https and mailto only (openExternalLink). */
+// Renderer flags: an external server (LH_DEV_URL or remote server mode) uses
+// the server-side subscription flow; remote mode also drops local-path bridges.
+let rendererArguments = process.env.LH_DEV_URL ? ["--lh-web-subscriptions"] : [];
+// Fork: remote server mode (electron/server-mode.cjs). Null in local and dev modes.
+let serverMode = null;
+let remoteServer = null;
+
 function createWindow(url) {
 	const win = new BrowserWindow({
 		width: 1440,
@@ -347,7 +355,7 @@ function createWindow(url) {
 			contextIsolation: true,
 			sandbox: true,
 			nodeIntegration: false,
-			...(process.env.LH_DEV_URL ? { additionalArguments: ["--lh-web-subscriptions"] } : {}),
+			...(rendererArguments.length ? { additionalArguments: rendererArguments } : {}),
 			preload: path.join(__dirname, "preload.cjs"),
 		},
 		// Live-resize + first-paint flash (owner, 2026-09-17): during a resize
@@ -621,6 +629,12 @@ function installMenu() {
 				{ role: "about" },
 				// Manual checks report their result in Settings → General.
 				{ label: "Check for Updates…", click: () => checkForUpdatesFromMenu() },
+				// Fork: remote server mode.
+				...(serverMode ? [
+					{ type: "separator" },
+					{ label: "LearnHarness Server…", click: () => serverMode.openChooser() },
+					{ label: "Copy Local Data to Server…", click: () => serverMode.copyLocalDataToServer(BrowserWindow.getAllWindows().find((win) => trustedAppWindows.has(win))) },
+				] : []),
 				{ type: "separator" },
 				{ role: "hide" },
 				{ role: "hideOthers" },
@@ -663,8 +677,51 @@ function installMenu() {
 	Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+let resolvingServer = false;
+
+/** Fork: remote server mode. Returns the remote credentials, null for local
+ * mode, or false when the user chose to quit. */
+async function resolveRemoteServer() {
+	const { createServerMode } = require("./server-mode.cjs");
+	serverMode = createServerMode({
+		electron: { app, BrowserWindow, ipcMain, dialog },
+		userData: app.getPath("userData"),
+		log,
+		tokenFile: path.join(app.getPath("home"), ".config", "learnharness-remote", "service-token.json"),
+		localDataDir: DATA_DIR(),
+		archiveModuleCandidates: [
+			path.join(process.resourcesPath ?? "", "data-archive.mjs"),
+			path.join(__dirname, "..", "src", "server", "data-archive.mjs"),
+		],
+	});
+	serverMode.registerIPC();
+	serverMode.importToken();
+	resolvingServer = true;
+	try {
+		for (;;) {
+			if (serverMode.profile().mode !== "remote") return null;
+			const creds = serverMode.credentials();
+			const probe = creds.error ? { ok: false, message: creds.error } : await probeServer(creds.url, creds);
+			if (probe.ok) return creds;
+			log(`server mode: cannot connect: ${probe.message}`);
+			const choice = await dialog.showMessageBox({
+				type: "error",
+				message: "LearnHarness cannot connect to your server.",
+				detail: [creds.url, probe.message].filter(Boolean).join("\n"),
+				buttons: ["Try Again", "Server Settings…", "Quit"], defaultId: 0, cancelId: 2,
+			});
+			if (choice.response === 1) await serverMode.openChooser(probe.message);
+			else if (choice.response === 2) { app.quit(); return false; }
+		}
+	} finally {
+		resolvingServer = false;
+	}
+}
+
 async function main() {
 	app.on("window-all-closed", () => {
+		// Fork: the server chooser can be the only window during boot.
+		if (resolvingServer) return;
 		chatgpt?.pause();
 		subscriptions?.pause();
 		// macOS convention: the app stays resident, reactivated from the Dock.
@@ -689,9 +746,23 @@ async function main() {
 	// Dev mode: point at a running `next dev` server (LH_DEV_URL) — no
 	// spawn, no packaging, full HMR. The rest of this shell still applies
 	// (guards, menu, single instance).
-	const devUrl = process.env.LH_DEV_URL;
+	// Fork: remote server mode. Decided before anything starts; the dev shell
+	// (LH_DEV_URL) never reads the profile.
+	if (!process.env.LH_DEV_URL) {
+		remoteServer = await resolveRemoteServer();
+		if (remoteServer === false) return;
+	}
+	const devUrl = process.env.LH_DEV_URL ?? remoteServer?.url;
 	const url = devUrl ?? `http://127.0.0.1:${await freePort()}`;
-	if (!devUrl) {
+	if (remoteServer) {
+		// No local server: the window loads the remote server. The service
+		// token rides only on requests to that exact origin.
+		rendererArguments = ["--lh-web-subscriptions", "--lh-remote"];
+		session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ["<all_urls>"] }, (details, callback) => {
+			callback({ requestHeaders: remoteAccessHeaders(details, remoteServer.url, remoteServer) });
+		});
+		log(`server mode: connected to ${remoteServer.url}`);
+	} else if (!devUrl) {
 		desktopAPISecret = randomBytes(32).toString("hex");
 		const ownedOrigin = new URL(url).origin;
 		// All URLs, not only /api: remove the header again on external redirects.
@@ -763,7 +834,11 @@ async function main() {
 	// Next server may be resolved here; never accept an arbitrary external URL.
 	ipcMain.handle("lh:subscriptions:web-browser", async (event, action) => {
 		if (!devUrl || !trustedAppWindows.has(BrowserWindow.fromWebContents(event.sender)) || !trustedSender(event, new URL(url).origin, BrowserWindow)) throw new Error("Untrusted development request.");
-		await openWebSubscriptionBrowser(action, new URL(url).origin, { openExternal: (target) => shell.openExternal(target) });
+		await openWebSubscriptionBrowser(action, new URL(url).origin, {
+			openExternal: (target) => shell.openExternal(target),
+			// Fork: remote server mode passes Cloudflare Access with the service token.
+			...(remoteServer ? { fetch: (target, init) => fetch(target, { ...init, headers: { ...init?.headers, "CF-Access-Client-Id": remoteServer.clientId, "CF-Access-Client-Secret": remoteServer.clientSecret } }) } : {}),
+		});
 	});
 
 	ipcMain.handle("lh:attachment:pick", (event, mode) => pickAttachmentPath(event, mode, {

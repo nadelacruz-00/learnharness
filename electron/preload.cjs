@@ -42,12 +42,18 @@ ipcRenderer.on("lh:open-settings", (_event, section) => {
 	else pendingOpenSettings = section;
 });
 
+// Fork: remote server mode. Local file paths mean nothing to a remote
+// server, so the path bridges are left out and the UI behaves as in a browser.
+const remoteServer = Boolean(process.argv?.includes("--lh-remote"));
+
 contextBridge.exposeInMainWorld("lh", {
 	platform: process.platform,
-	// Resolve only a renderer-supplied, OS-backed File. No filesystem API,
-	// uploads, copies, or DOM File IPC to main; sandbox/isolation stay on.
-	getPathForFile: (file) => webUtils.getPathForFile(file),
-	chooseAttachmentFolder: () => ipcRenderer.invoke("lh:attachment:pick", "folder"),
+	...(remoteServer ? { remote: true } : {
+		// Resolve only a renderer-supplied, OS-backed File. No filesystem API,
+		// uploads, copies, or DOM File IPC to main; sandbox/isolation stay on.
+		getPathForFile: (file) => webUtils.getPathForFile(file),
+		chooseAttachmentFolder: () => ipcRenderer.invoke("lh:attachment:pick", "folder"),
+	}),
 	...(process.argv?.includes("--lh-web-subscriptions") ? {
 		subscriptionTransport: "web",
 		openSubscriptionBrowser: (action) => ipcRenderer.invoke("lh:subscriptions:web-browser", action),
