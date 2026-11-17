@@ -81,7 +81,15 @@ export interface SessionModelDeps {
 	/** Injectable retry timing (tests). */
 	pollMs?: number;
 	waitMaxMs?: number;
+	/** Injectable clock and stale-stream threshold (tests). */
+	now?: () => number;
+	streamStaleMs?: number;
 }
+
+/** A live turn stream that delivered no bytes (events or the server's
+ *  `: ping` heartbeat, sent every 20 s) for this long is dead: a sleeping
+ *  phone or a dropped proxy hop can leave reader.read() pending forever. */
+export const STREAM_STALE_MS = 45_000;
 
 /** A local optimistic id (never a server stamp — absorption and the
  *  settle swap both key on this prefix). */
@@ -123,8 +131,11 @@ class StreamReadError extends Error {
 	}
 }
 
-/** Wire events; return true ONLY for the explicit completion marker. */
-export async function* sseEvents(reader: ReadableStreamDefaultReader<Uint8Array>): AsyncGenerator<Record<string, unknown>, boolean> {
+/** Wire events; return true ONLY for the explicit completion marker.
+ *  Frames without a `data: ` line (SSE comments such as the server's
+ *  `: ping` heartbeat) are skipped. onActivity fires for every chunk read,
+ *  heartbeats included — the liveness signal for reattachIfNeeded. */
+export async function* sseEvents(reader: ReadableStreamDefaultReader<Uint8Array>, onActivity?: () => void): AsyncGenerator<Record<string, unknown>, boolean> {
 	const decoder = new TextDecoder();
 	let buf = "";
 	for (;;) {
@@ -133,6 +144,7 @@ export async function* sseEvents(reader: ReadableStreamDefaultReader<Uint8Array>
 		catch (err) { throw new StreamReadError(err); }
 		const { done, value } = chunk;
 		if (done) return false;
+		onActivity?.();
 		buf += decoder.decode(value, { stream: true });
 		for (;;) {
 			const end = buf.indexOf("\n\n");
@@ -326,6 +338,14 @@ export class SessionModel {
 	/** Retain the latest request across stop(): an opening POST still owns
 	 * its refusal after view detachment, but never after a newer request. */
 	private latestRequest: AbortController | null = null;
+	private readonly now: () => number;
+	private readonly streamStaleMs: number;
+	/** Wall-clock time of the current consume's last received bytes. */
+	private lastStreamActivity = 0;
+	/** turnInFlight from the newest adopted canonical read. */
+	private recordTurnInFlight: boolean | undefined;
+	/** The single pending reattach decision (coalesces wake events). */
+	private reattachTask: Promise<boolean> | null = null;
 	/** Synchronous ready check for the gate (send/read mount logic). */
 	readyRef = true;
 
@@ -345,6 +365,8 @@ export class SessionModel {
 		this.fetch = opts.fetch ?? ((...args) => globalThis.fetch(...args));
 		this.pollMs = opts.pollMs ?? TURN_POLL_MS;
 		this.waitMaxMs = opts.waitMaxMs ?? TURN_WAIT_MAX_MS;
+		this.now = opts.now ?? Date.now;
+		this.streamStaleMs = opts.streamStaleMs ?? STREAM_STALE_MS;
 		this.onChange = opts.onChange;
 		this.onReattachSettled = opts.onReattachSettled;
 	}
@@ -475,6 +497,7 @@ export class SessionModel {
 			this.canonicalAcknowledged = Math.max(this.canonicalAcknowledged, ticket);
 			this.replaceMessages(record.messages, record.turnError, record.pluginQuestionAvailability, record.pluginProblemAvailability);
 		}
+		if (typeof record.turnInFlight === "boolean") this.recordTurnInFlight = record.turnInFlight;
 		return record;
 	}
 
@@ -717,7 +740,9 @@ export class SessionModel {
 		let sawEvent = false;
 		let sawDone = false;
 		try {
-			const events = sseEvents(reader);
+			const events = sseEvents(reader, () => {
+				if (this.consumeAbort === controller) this.lastStreamActivity = this.now();
+			});
 			for (;;) {
 				let next: IteratorResult<Record<string, unknown>, boolean>;
 				try { next = await events.next(); }
@@ -796,6 +821,7 @@ export class SessionModel {
 		const controller = new AbortController();
 		this.consumeAbort = controller;
 		this.latestRequest = controller;
+		this.lastStreamActivity = this.now();
 		// REPLAY ONTO A CLEAN SLATE (owner, optimistic round 3, 2026-10-02):
 		// the reattach stream replays the turn from its FIRST event — an
 		// aborted earlier attempt (React StrictMode's simulated remount)
@@ -853,6 +879,64 @@ export class SessionModel {
 	}
 
 	/**
+	 * WAKE REATTACH (remote-server Phase 3): the page became visible again,
+	 * the network came back, or the page returned from the back/forward
+	 * cache. Two cases:
+	 * - A turn is in progress here (submitted/streaming) but its stream is
+	 *   dead (no owner, or no bytes for streamStaleMs — the server pings
+	 *   every 20 s): refetch the record and replay the SAME server turn.
+	 * - Idle (ready/error): read the canonical record; when it says a turn
+	 *   is in flight (started elsewhere, or our stream died and its one
+	 *   recovery failed), attach to it.
+	 * resumeStream aborts the current consume before it opens its own, so
+	 * there is never a second concurrent stream; concurrent wake calls share
+	 * one decision. Resolves true when a reattach started (it does not wait
+	 * for the turn to finish). Never resends the learner's input.
+	 */
+	reattachIfNeeded(): Promise<boolean> {
+		if (this.reattachTask) return this.reattachTask;
+		// .finally runs as a microtask, so it always sees the assignment
+		// below (the busy branch decides synchronously; a try/finally inside
+		// the async body would clear the slot BEFORE it was set, pinning the
+		// first decision forever).
+		const task: Promise<boolean> = this.decideReattach().finally(() => {
+			if (this.reattachTask === task) this.reattachTask = null;
+		});
+		this.reattachTask = task;
+		return task;
+	}
+
+	/** A method, not an inline check: TypeScript keeps a property narrowing
+	 *  across an await, but the status can change while the record loads. */
+	private turnBusy(): boolean {
+		return this.statusValue === "submitted" || this.statusValue === "streaming";
+	}
+
+	private async decideReattach(): Promise<boolean> {
+		if (this.turnBusy()) {
+			if (!this.streamDead()) return false;
+			void this.resumeStream(true, false);
+			return true;
+		}
+		const owner = this.consumeAbort;
+		const connection = this.connectionGeneration;
+		this.recordTurnInFlight = undefined;
+		if (!(await this.reconcile())) return false;
+		if (this.recordTurnInFlight !== true) return false;
+		// A send, stop or another attach won the race while we read.
+		if (this.consumeAbort !== owner || this.connectionGeneration !== connection) return false;
+		if (this.turnBusy()) return false;
+		void this.resumeStream(false);
+		return true;
+	}
+
+	private streamDead(): boolean {
+		const owner = this.consumeAbort;
+		if (!owner || owner.signal.aborted) return true;
+		return this.now() - this.lastStreamActivity >= this.streamStaleMs;
+	}
+
+	/**
 	 * SEND: one explicit input event. Optimistic appends first (the instant
 	 * answer/note UX — the server's write-ahead persists the canon), then
 	 * POST + consume. Ready-gated: one turn per client at a time (the
@@ -891,6 +975,7 @@ export class SessionModel {
 		const controller = new AbortController();
 		this.consumeAbort = controller;
 		this.latestRequest = controller;
+		this.lastStreamActivity = this.now();
 		this.evaluationOwner = (input.type === "plugin-question-answer" && pluginPending?.requiresGrading) ||
 			(input.type === "plugin-problem-submission" && activeProblemOf(this.base)?.pluginProblem?.requiresProcessing) ? controller : null;
 		this.setError(null);

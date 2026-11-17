@@ -18,6 +18,9 @@ import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import type { ChatInput, LhMessage, QuestionAnswerData } from "@/src/core";
 import { SessionModel, type SessionState } from "@/components/session-core";
 
+/** Wake events (visibilitychange, online, pageshow) often fire together. */
+export const REATTACH_DEBOUNCE_MS = 500;
+
 export interface UseChatSessionOptions {
 	chatId: string;
 	/** The native record seed (server-rendered page or a full sync). */
@@ -72,6 +75,36 @@ export function useChatSession({ chatId, initialMessages, initialError, initiall
 			model.stop();
 		};
 	}, [initiallyInFlight, model]);
+
+	// WAKE REATTACH (remote-server Phase 3): a phone that slept, a laptop
+	// that lost Wi-Fi, or a page restored from the back/forward cache can
+	// hold a dead turn stream (or have missed a turn another device
+	// started). On each wake signal, ask the model to reattach if needed.
+	// Debounced: one wake usually fires several of these events together.
+	useEffect(() => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const schedule = () => {
+			if (timer !== undefined) clearTimeout(timer);
+			timer = setTimeout(() => {
+				timer = undefined;
+				// Still offline: a record read now would only fail and show the
+				// sync-failed banner. The `online` event schedules the real try.
+				if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+				void model.reattachIfNeeded();
+			}, REATTACH_DEBOUNCE_MS);
+		};
+		const onVisibility = () => { if (document.visibilityState === "visible") schedule(); };
+		const onPageShow = (event: PageTransitionEvent) => { if (event.persisted) schedule(); };
+		document.addEventListener("visibilitychange", onVisibility);
+		window.addEventListener("online", schedule);
+		window.addEventListener("pageshow", onPageShow);
+		return () => {
+			if (timer !== undefined) clearTimeout(timer);
+			document.removeEventListener("visibilitychange", onVisibility);
+			window.removeEventListener("online", schedule);
+			window.removeEventListener("pageshow", onPageShow);
+		};
+	}, [model]);
 
 	// The view + state, derived per model change from the model.
 	const state = useMemo<SessionState>(() => model.getState(), [model, version] as const);

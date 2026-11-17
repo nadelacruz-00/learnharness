@@ -365,11 +365,64 @@ export function runPiTurn(spec: PiTurnSpec): PiTurnHandle {
 	};
 }
 
+/** The SSE keepalive interval. Cloudflare closes an HTTP connection that
+ *  sends no bytes for about 100 s; a long tool call or a slow model can be
+ *  silent for longer than that. 20 s keeps every proxy hop busy. */
+export const TURN_HEARTBEAT_MS = 20_000;
+
+const HEARTBEAT_FRAME = new TextEncoder().encode(": ping\n\n");
+
+/** Wrap a subscriber stream with SSE comment pings (`: ping`). Clients that
+ *  follow the SSE spec (and sseEvents in components/session-core.ts) skip
+ *  comment frames. The timer stops when the source ends (the turn settled)
+ *  or the reader cancels (the view left — the turn runs on). */
+export function withHeartbeat(source: ReadableStream<Uint8Array>, heartbeatMs = TURN_HEARTBEAT_MS): ReadableStream<Uint8Array> {
+	const reader = source.getReader();
+	let timer: ReturnType<typeof setInterval> | undefined;
+	const stopHeartbeat = () => {
+		if (timer === undefined) return;
+		clearInterval(timer);
+		timer = undefined;
+	};
+	return new ReadableStream<Uint8Array>({
+		start(controller) {
+			timer = setInterval(() => {
+				// Bytes still queued for the reader already keep the line busy.
+				if ((controller.desiredSize ?? 0) <= 0) return;
+				try { controller.enqueue(HEARTBEAT_FRAME); }
+				catch { stopHeartbeat(); }
+			}, heartbeatMs);
+			// Never holds the process (or the test runner) open.
+			(timer as { unref?: () => void }).unref?.();
+		},
+		async pull(controller) {
+			try {
+				const { done, value } = await reader.read();
+				if (done) {
+					stopHeartbeat();
+					controller.close();
+					return;
+				}
+				controller.enqueue(value);
+			} catch (err) {
+				stopHeartbeat();
+				controller.error(err);
+			}
+		},
+		cancel(reason) {
+			stopHeartbeat();
+			return reader.cancel(reason);
+		},
+	});
+}
+
 /** The subscriber-shaped SSE response — the POST /api/chat response and
  * GET /api/chats/[id]/stream are BOTH this: same headers, same wire
- * dialect, one protocol for the client to consume. */
-export function piTurnResponse(handle: PiTurnHandle): Response {
-	return new Response(handle.subscribe(), {
+ * dialect, one protocol for the client to consume. A `: ping` comment
+ * every TURN_HEARTBEAT_MS keeps proxies (Cloudflare Tunnel) from closing
+ * the connection while the turn is silent. */
+export function piTurnResponse(handle: PiTurnHandle, heartbeatMs = TURN_HEARTBEAT_MS): Response {
+	return new Response(withHeartbeat(handle.subscribe(), heartbeatMs), {
 		headers: {
 			"Content-Type": "text/event-stream",
 			"Cache-Control": "no-cache, no-transform",
