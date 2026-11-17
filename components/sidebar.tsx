@@ -94,9 +94,19 @@ declare global {
 	}
 }
 
-const SidebarContext = createContext<{ open: boolean; toggle: () => void }>({
+/*
+ * Phone layout (fork, mobile web UI): below COMPACT_MAX the sidebar is a
+ * drawer OVER the page (fixed, with a backdrop), closed by default and on
+ * every navigation, so the page always gets the full width. The persisted
+ * desktop preference and the Electron narrow-window rules apply only above it.
+ */
+const COMPACT_QUERY = "(max-width: 767px)";
+
+const SidebarContext = createContext<{ open: boolean; toggle: () => void; compact: boolean; close: () => void }>({
 	open: false,
 	toggle: () => {},
+	compact: false,
+	close: () => {},
 });
 
 export function useSidebar() {
@@ -116,6 +126,21 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	const [open, setOpen] = useState(false);
 	const [narrow, setNarrow] = useState(false);
 	const [mounted, setMounted] = useState(false);
+	const [compact, setCompact] = useState(false);
+	const [drawerOpen, setDrawerOpen] = useState(false);
+	const pathname = usePathname();
+
+	// Phone layout: track the breakpoint; the drawer closes on navigation.
+	useEffect(() => {
+		if (typeof window.matchMedia !== "function") return; // old browsers, test DOMs
+		const query = window.matchMedia(COMPACT_QUERY);
+		const sync = () => { setCompact(query.matches); if (!query.matches) setDrawerOpen(false); };
+		sync();
+		query.addEventListener("change", sync);
+		return () => query.removeEventListener("change", sync);
+	}, []);
+	useEffect(() => { setDrawerOpen(false); }, [pathname]);
+	const closeDrawer = useCallback(() => setDrawerOpen(false), []);
 
 	useEffect(() => {
 		// Electron shell detection (merged chrome, 2026-09-17): keys the
@@ -158,6 +183,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	}, []);
 
 	const toggle = useCallback(() => {
+		if (compact) { setDrawerOpen((v) => !v); return; }
 		// Opening while narrow (auto-closed, or the user's own closed-at-
 		// narrow): ask the shell to widen to the threshold — the resize
 		// listener flips `narrow` and the sidebar appears. The preference
@@ -173,7 +199,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 			localStorage.setItem(STORAGE_KEY, v ? "0" : "1");
 			return !v;
 		});
-	}, [narrow, open]);
+	}, [compact, narrow, open]);
 
 	// ⌘B: the global shortcut dispatches kbdEventForAction("toggle-sidebar")
 	// and the context answers on exactly that name — the shared spelling
@@ -189,7 +215,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	}, [toggle]);
 
 	return (
-		<SidebarContext.Provider value={{ open: open && !narrow, toggle }}>
+		<SidebarContext.Provider value={{ open: compact ? drawerOpen : open && !narrow, toggle, compact, close: closeDrawer }}>
 			{/* transitions gated on mount: no slide-in flash on page load */}
 			<div className={cn("flex h-dvh", mounted && "[&_.sidebar-motion]:transition-[width,margin,opacity]")}>{children}</div>
 		</SidebarContext.Provider>
@@ -404,7 +430,7 @@ const KIND_FILTER_KEY = "lh:session-kind-filter";
 
 function SessionsSidebar() {
 	const interactions = useInteractionLayers();
-	const { open, toggle } = useSidebar();
+	const { open, toggle, compact, close } = useSidebar();
 	const [chats, setChats] = useState<ChatListItem[] | null>(null);
 	const [query, setQuery] = useState("");
 	const [kindFilter, setKindFilter] = useState<SessionKindFilter>("all");
@@ -652,11 +678,26 @@ function SessionsSidebar() {
 	}, [open, pathname, refresh]);
 
 	return (
+		<>
+		{compact && open && (
+			<div
+				aria-hidden
+				data-testid="sidebar-backdrop"
+				className="fixed inset-0 z-40 bg-black/50"
+				onClick={close}
+			/>
+		)}
 		<aside
-			className={cn("sidebar-motion shrink-0 overflow-hidden duration-200", open ? "w-72" : "w-0")}
+			className={cn(
+				"sidebar-motion overflow-hidden duration-200",
+				compact
+					? cn("fixed inset-y-0 left-0 z-50 h-dvh w-[min(18rem,85vw)] shadow-xl transition-transform", open ? "translate-x-0" : "-translate-x-full")
+					: cn("shrink-0", open ? "w-72" : "w-0"),
+			)}
 			aria-hidden={!open}
+			data-compact={compact || undefined}
 		>
-			<div className="flex h-full w-72 flex-col border-r bg-background">
+			<div className={cn("flex h-full flex-col border-r bg-background", compact ? "w-full" : "w-72")}>
 				{/* LH wordmark — the owner's header; close toggle sits at the edge.
 				    Merged chrome (2026-09-17): in Electron this band is the
 				    window's drag surface and starts after the traffic lights
@@ -946,6 +987,7 @@ function SessionsSidebar() {
 					onDeleted={onDeleted}
 				/>
 			</aside>
+		</>
 	);
 }
 

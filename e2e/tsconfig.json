@@ -1,0 +1,7 @@
+{
+  "//": "Fork: Playwright tests are typechecked on their own. Playwright's types load Electron's global DOM types, which must not leak into the app's typecheck or the Next build.",
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "incremental": false },
+  "include": ["./**/*.ts", "../playwright.config.ts"],
+  "exclude": []
+}
