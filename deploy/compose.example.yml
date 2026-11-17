@@ -1,0 +1,24 @@
+# LearnHarness remote server (fork). Copy to /opt/stacks/learnharness/compose.yml.
+# Reached only through the Cloudflare Tunnel on the external `edge` network:
+# tunnel public hostname -> http://learnharness-app:3000. No host ports.
+# See docs/remote-server.md.
+name: learnharness
+services:
+  app:
+    # Build from a checkout of the fork at a release commit; pin the tag.
+    build:
+      context: ./src
+    image: learnharness:0.6.1-remote.1
+    container_name: learnharness-app
+    restart: unless-stopped
+    env_file: .env          # LH_CF_ACCESS_TEAM_DOMAIN, LH_CF_ACCESS_AUD, LH_PUBLIC_ORIGIN
+    volumes:
+      - data:/data          # /data/data (learning data), /data/auth.json (API keys)
+    networks: [edge]
+    mem_limit: 1g
+    # no "ports:" section
+networks:
+  edge:
+    external: true
+volumes:
+  data: {}

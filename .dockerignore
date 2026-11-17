@@ -1,0 +1,18 @@
+# Build context for the server image. Never send data or secrets.
+.git
+node_modules
+**/node_modules
+.next
+dist
+data
+auth.json
+auth.json.*
+*-credentials.json*
+.env
+.env.*
+core-plugins
+.core-plugins-*
+plugins/*/dist
+plugins/*/.sdk
+debug
+*.log
