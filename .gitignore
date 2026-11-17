@@ -1,5 +1,7 @@
 node_modules/
 data/
+# Fork: the data export/import API routes are code, not learning data.
+!/app/api/data/
 .next/
 *.log
 .DS_Store
