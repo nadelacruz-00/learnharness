@@ -70,6 +70,15 @@ check("allowed user (any case): page renders", page.status === 200, String(page.
 const whoami = await get("/api/whoami", values.login);
 const who = await whoami.json().catch(() => ({}));
 check("whoami names the caller", whoami.status === 200 && who.login === values.login.toLowerCase() && who.remote === true, `${whoami.status} ${who.login}`);
+// Web app icons: favicon.ico is outside Proxy (no data); the app/ icon
+// routes pass the gate like pages, so tailnet users get them.
+const favicon = await get("/favicon.ico");
+check("favicon.ico is served without identity", favicon.status === 200, String(favicon.status));
+for (const route of ["/icon.svg", "/apple-icon.png"]) {
+	const refused = await get(route);
+	const icon = await get(route, values.login);
+	check(`${route}: refused without identity, served to the allowed user`, refused.status === 403 && icon.status === 200 && /image\//.test(icon.headers.get("content-type") ?? ""), `${refused.status}/${icon.status} ${icon.headers.get("content-type")}`);
+}
 const chats = await get("/api/chats", values.login);
 check("allowed user: API answers", chats.status === 200, String(chats.status));
 

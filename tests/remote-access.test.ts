@@ -182,6 +182,16 @@ describe("remote mode proxy", () => {
 		});
 	});
 
+	it("serves the web app icons to tailnet users only; favicon.ico skips Proxy", async () => {
+		await withEnv(remoteEnv(), () => {
+			for (const path of ["/icon.svg", "/apple-icon.png"]) {
+				assert.equal(proxy(new NextRequest(`http://${HOST}${path}`, { headers: { host: HOST } })).status, 403, path);
+				const ok = proxy(new NextRequest(`http://${HOST}${path}`, { headers: { host: HOST, "tailscale-user-login": LOGIN } }));
+				assert.equal(ok.headers.get("x-middleware-next"), "1", path);
+			}
+		});
+	});
+
 	it("refuses a foreign Host even with a valid login", async () => {
 		await withEnv(remoteEnv(), () => {
 			const response = proxy(new NextRequest("http://evil.example/api/chats", { headers: { host: "evil.example", "tailscale-user-login": LOGIN } }));
