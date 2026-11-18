@@ -1,7 +1,11 @@
 # LearnHarness remote server, Tailscale variant (fork).
-# Copy to /opt/stacks/learnharness-ts/compose.yml, with ./tailscale/serve.json
-# next to it and a checkout of the fork in ./src. See
-# docs/remote-server-tailscale.md.
+# Copy to <stack folder>/compose.yml (for example ~/learnharness-server on a
+# home server or PC), with ./tailscale/serve.json next to it and a checkout
+# of the fork in ./src. See docs/remote-server-tailscale.md.
+#
+# Same file for every host: Linux with Docker Engine (amd64 or arm64, e.g. a
+# mini PC or a Raspberry Pi 5), Docker Desktop on Windows or macOS, or a VPS.
+# Build the image on the machine that runs it.
 #
 # Reached only over the tailnet: the `tailscale` sidecar joins the tailnet as
 # its own machine and `tailscale serve` (serve.json) proxies
@@ -16,7 +20,7 @@ services:
     image: tailscale/tailscale:v1.104.7@sha256:72c1e19e0aedca96b8533bbb0b4368564410ff20b17e53b804eb6c1f04a31be4
     container_name: learnharness-ts
     hostname: learnharness
-    restart: unless-stopped
+    restart: unless-stopped   # starts again with Docker after a reboot
     environment:
       # Only needed for the first start; the node key then lives in ts-state.
       TS_AUTHKEY: ${TS_AUTHKEY:-}
@@ -24,7 +28,8 @@ services:
       TS_HOSTNAME: ${TS_HOSTNAME:-learnharness}
       TS_STATE_DIR: /var/lib/tailscale
       TS_SERVE_CONFIG: /config/serve.json
-      # Userspace networking: no /dev/net/tun, no NET_ADMIN. Serve still works.
+      # Userspace networking: no /dev/net/tun, no NET_ADMIN, so it also runs
+      # unchanged under Docker Desktop. Serve still works.
       TS_USERSPACE: "true"
       TS_ACCEPT_DNS: "false"
     volumes:

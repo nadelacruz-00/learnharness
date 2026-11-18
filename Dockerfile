@@ -2,7 +2,8 @@
 # LearnHarness server image (fork: remote server mode, Tailscale variant).
 # Runs the Next.js standalone server on 127.0.0.1:3000 inside the network
 # namespace of a Tailscale sidecar, which serves it over HTTPS on the tailnet.
-# See docs/remote-server-tailscale.md. Build on the target architecture: native modules
+# See docs/remote-server-tailscale.md. Build on the machine that runs it
+# (amd64 or arm64; Docker Engine or Docker Desktop): native modules
 # (@napi-rs/canvas, @resvg/resvg-js, photon) are traced per build platform.
 
 # node:26-bookworm-slim, multi-arch index digest (amd64 + arm64), 2026-11-11.
