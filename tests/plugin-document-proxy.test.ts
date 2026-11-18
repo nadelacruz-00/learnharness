@@ -43,7 +43,7 @@ it("Proxy retains API roots, siblings, endpoint lookalikes and all other API rou
 		"/api/graph/import", "/api/events", "/api/chat", "/api/settings/models", "/api/chats/scratch/markdown",
 	]) assert.equal(proxyMatches(path), true, path);
 	// Fork: pages also reach Proxy so remote server mode can gate them with the
-	// Cloudflare Access JWT; local modes let non-API paths through in proxy().
+	// Tailscale identity header; local modes let non-API paths through in proxy().
 	for (const path of ["/", "/chat/new", "/apix", "/api-other/plugins/document-one/documents/markdown"]) {
 		assert.equal(proxyMatches(path), true, path);
 	}

@@ -2,7 +2,8 @@
  * must not prevent access to existing learning data or teaching/practice. */
 export async function register() {
 	if (process.env.NEXT_RUNTIME === "nodejs") {
-		// Remote server mode (fork): refuse to start with a broken Access setup.
+		// Remote server mode (fork): refuse to start with a broken Tailscale
+		// setup or a non-loopback bind address.
 		const { assertRemoteAccessConfigured } = await import("./src/server/remote-access.ts");
 		try { assertRemoteAccessConfigured(); }
 		catch (error) {

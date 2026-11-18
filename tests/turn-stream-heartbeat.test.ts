@@ -1,7 +1,7 @@
 /**
- * TURN STREAM HEARTBEAT (remote-server Phase 3): Cloudflare closes an HTTP
- * connection that sends no bytes for about 100 s, and a long tool call or a
- * slow model can be silent for longer. piTurnResponse wraps the subscriber
+ * TURN STREAM HEARTBEAT (remote-server Phase 3): proxies, mobile networks and
+ * NAT tables can close an HTTP connection that sends no bytes for a minute or
+ * two, and a long tool call or a slow model can be silent for longer. piTurnResponse wraps the subscriber
  * stream so that a `: ping` SSE comment goes out every TURN_HEARTBEAT_MS
  * while the turn is live. The timer must stop when the turn settles (the
  * source closes) and when the view leaves (the reader cancels), and the

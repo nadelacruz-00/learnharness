@@ -365,9 +365,10 @@ export function runPiTurn(spec: PiTurnSpec): PiTurnHandle {
 	};
 }
 
-/** The SSE keepalive interval. Cloudflare closes an HTTP connection that
- *  sends no bytes for about 100 s; a long tool call or a slow model can be
- *  silent for longer than that. 20 s keeps every proxy hop busy. */
+/** The SSE keepalive interval. Reverse proxies, mobile networks and NAT
+ *  tables can close an HTTP connection that sends no bytes for a minute or
+ *  two; a long tool call or a slow model can be silent for longer than that.
+ *  20 s keeps every hop busy. */
 export const TURN_HEARTBEAT_MS = 20_000;
 
 const HEARTBEAT_FRAME = new TextEncoder().encode(": ping\n\n");
@@ -419,7 +420,7 @@ export function withHeartbeat(source: ReadableStream<Uint8Array>, heartbeatMs = 
 /** The subscriber-shaped SSE response — the POST /api/chat response and
  * GET /api/chats/[id]/stream are BOTH this: same headers, same wire
  * dialect, one protocol for the client to consume. A `: ping` comment
- * every TURN_HEARTBEAT_MS keeps proxies (Cloudflare Tunnel) from closing
+ * every TURN_HEARTBEAT_MS keeps proxies and NAT hops from closing
  * the connection while the turn is silent. */
 export function piTurnResponse(handle: PiTurnHandle, heartbeatMs = TURN_HEARTBEAT_MS): Response {
 	return new Response(withHeartbeat(handle.subscribe(), heartbeatMs), {

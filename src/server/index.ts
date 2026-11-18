@@ -54,6 +54,8 @@ export { runPiTurn, piTurnResponse, type PiTurnHandle, type PiTurnSpec } from ".
 export * from "./observability.ts";
 // Data export/import (remote-server plan, phase 4): GET /api/data/export, POST /api/data/import.
 export { dataExportResponse, dataImportResponse } from "./data-transfer.ts";
+// Fork: remote server mode (Tailscale identity check for GET /api/whoami).
+export { remoteIdentityResponse } from "./remote-access.ts";
 export { abortPluginWorkerActivity } from "./plugin-worker-activity.ts";
 export * from "./model-catalog.ts";
 export { subscriptionControlsResponse, subscriptionBrowserResponse } from "./web-subscription-http.ts";

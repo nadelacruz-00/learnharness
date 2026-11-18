@@ -13,10 +13,10 @@ function isAPIPath(pathname: string): boolean {
  * inside its handler, avoiding Next's silently truncated Proxy body clone.
  * No public callback or worker bypass: legitimate self-HTTP still needs the capability.
  *
- * Remote server mode (fork): pages are gated too, by the Cloudflare Access JWT,
- * because pages render learning data on the server. Local modes stay
- * synchronous and keep their /api-only policy. */
-export function proxy(request: NextRequest): NextResponse | Promise<NextResponse> {
+ * Remote server mode (fork): pages are gated too, by the Tailscale identity
+ * header from `tailscale serve`, because pages render learning data on the
+ * server. Local modes keep their /api-only policy. */
+export function proxy(request: NextRequest): NextResponse {
 	if (remoteMode()) return remoteProxy(request);
 	return localProxy(request);
 }
@@ -30,8 +30,8 @@ function localProxy(request: NextRequest): NextResponse {
 	return NextResponse.next();
 }
 
-async function remoteProxy(request: NextRequest): Promise<NextResponse> {
-	const refusal = await remoteAccessRefusal(request);
+function remoteProxy(request: NextRequest): NextResponse {
+	const refusal = remoteAccessRefusal(request);
 	if (refusal) {
 		if (isAPIPath(request.nextUrl.pathname)) return NextResponse.json({ error: refusal }, { status: 403, headers: NO_STORE });
 		return new NextResponse(refusal, { status: 403, headers: { ...NO_STORE, "Content-Type": "text/plain; charset=utf-8" } });
