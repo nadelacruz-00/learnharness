@@ -7,7 +7,7 @@
 - [Claude Code](claude-code.md) — use an installed CLI and troubleshoot its connection.
 - [Custom and local models](custom-providers.md) — configure an OpenAI-compatible endpoint.
 - [Context, caching, and costs](compaction-accounting.md) — understand the session meters and advanced cache preferences.
-- [Remote server over Tailscale](remote-server-tailscale.md) — (fork) run the server on a VPS for your devices on your tailnet, step by step.
+- [Remote server over Tailscale](remote-server-tailscale.md) — (fork) run the server on a home machine (recommended) or a VPS for your devices on your tailnet, step by step.
 - [Learning-data skill](../skills/learnharness/SKILL.md) — a read-only guide and standalone readers for local learning records.
 
 ## Development and maintenance

@@ -55,7 +55,7 @@ Choose your models, then start a session with what you want to understand. You c
 
 See [Getting started](docs/getting-started.md) for model setup, dictation, files, and notes imports, and [context, caching, and costs](docs/compaction-accounting.md) for advanced cache preferences.
 
-This fork can also run the server on your own VPS, reachable only over your Tailscale tailnet, for a browser on your phone or tablet and for the desktop app in server mode. See [Remote server over Tailscale](docs/remote-server-tailscale.md) for the design and step-by-step installation.
+This fork can also run the server on a machine you own, reachable only over your Tailscale tailnet, for a browser on your phone or tablet and for the desktop app in server mode. A home server, mini PC, Raspberry Pi 5 or desktop PC (Linux, Windows or macOS) is the recommended host; a VPS also works. See [Remote server over Tailscale](docs/remote-server-tailscale.md) for the design and step-by-step installation.
 
 All three platforms support in-app updates.
 
