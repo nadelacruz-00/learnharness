@@ -1,7 +1,7 @@
 /**
- * Fork: desktop remote server mode. The service token goes only to the
- * remote origin, is stored only through a strong OS keyring, and the server
- * probe tells a token problem from a network problem.
+ * Fork: desktop remote server mode (Tailscale variant). The profile holds only
+ * the mode and the server address (no secret), and the server probe tells a
+ * Tailscale identity problem from a network problem.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -13,41 +13,14 @@ import { createRequire } from "node:module";
 import { describe, it } from "node:test";
 
 const require = createRequire(import.meta.url);
-const { remoteAccessHeaders, probeServer } = require("../electron/remote-headers.cjs");
+const { probeServer } = require("../electron/server-probe.cjs");
 const profile = require("../electron/server-profile.cjs");
 
-const creds = { clientId: "abcdef0123456789.access", clientSecret: "s3cret-value" };
-const origin = "https://learn.example.com";
-
-function fakeSafeStorage(backend = "gnome_libsecret") {
-	return {
-		isEncryptionAvailable: () => true,
-		getSelectedStorageBackend: () => backend,
-		encryptString: (value: string) => Buffer.from(`enc:${value}`),
-		decryptString: (buffer: Buffer) => buffer.toString().replace(/^enc:/, ""),
-	};
-}
+const origin = "https://learnharness.tail1234.ts.net";
 
 function tempDir() {
 	return fs.mkdtempSync(path.join(os.tmpdir(), "lh-remote-desktop-"));
 }
-
-describe("service token headers", () => {
-	it("adds the token only for the exact remote origin", () => {
-		const added = remoteAccessHeaders({ url: `${origin}/api/chats`, requestHeaders: { Accept: "*/*" } }, origin, creds);
-		assert.equal(added["CF-Access-Client-Id"], creds.clientId);
-		assert.equal(added["CF-Access-Client-Secret"], creds.clientSecret);
-		for (const url of ["https://evil.example/api", "http://learn.example.com/api", "https://learn.example.com:8443/", "https://user:pw@learn.example.com/", "not a url"]) {
-			const headers = remoteAccessHeaders({ url, requestHeaders: {} }, origin, creds);
-			assert.equal(headers["CF-Access-Client-Secret"], undefined, url);
-		}
-	});
-
-	it("strips any token a page or redirect tries to send elsewhere", () => {
-		const headers = remoteAccessHeaders({ url: "https://evil.example/", requestHeaders: { "cf-access-client-id": "x", "CF-ACCESS-CLIENT-SECRET": "y", Keep: "1" } }, origin, creds);
-		assert.deepEqual(headers, { Keep: "1" });
-	});
-});
 
 describe("server profile", () => {
 	it("defaults to local and survives a broken file", () => {
@@ -57,45 +30,32 @@ describe("server profile", () => {
 		assert.deepEqual(profile.loadProfile(dir), { mode: "local" });
 	});
 
-	it("stores the secret only as ciphertext, with mode 600, and never returns it", () => {
+	it("stores the mode and the origin only, with mode 600", () => {
 		const dir = tempDir();
-		const saved = profile.saveProfile(dir, { mode: "remote", url: "https://learn.example.com/", clientId: creds.clientId, secret: creds.clientSecret }, fakeSafeStorage());
-		assert.deepEqual(saved, { mode: "remote", url: origin, clientId: creds.clientId, hasSecret: true });
+		const saved = profile.saveProfile(dir, { mode: "remote", url: `${origin}/`, secret: "ignored" });
+		assert.deepEqual(saved, { mode: "remote", url: origin });
 		const file = path.join(dir, "server-profile.json");
-		const raw = fs.readFileSync(file, "utf8");
-		assert.ok(!raw.includes(creds.clientSecret));
+		assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { mode: "remote", url: origin });
 		assert.equal(fs.statSync(file).mode & 0o777, 0o600);
-		assert.deepEqual(profile.remoteCredentials(profile.loadProfile(dir), fakeSafeStorage()), { url: origin, ...creds });
+		assert.deepEqual(profile.remoteServerFromProfile(profile.loadProfile(dir)), { url: origin });
 	});
 
-	it("keeps the stored secret when the form leaves it empty", () => {
+	it("keeps the address when switching to local, and drops fields of the Cloudflare variant", () => {
 		const dir = tempDir();
-		profile.saveProfile(dir, { mode: "remote", url: origin, clientId: creds.clientId, secret: creds.clientSecret }, fakeSafeStorage());
-		profile.saveProfile(dir, { mode: "local", url: origin, clientId: creds.clientId, secret: "" }, fakeSafeStorage());
-		const local = profile.loadProfile(dir);
-		assert.equal(local.mode, "local");
-		assert.ok(local.secretCipher);
+		fs.writeFileSync(path.join(dir, "server-profile.json"), JSON.stringify({ mode: "remote", url: origin, clientId: "old.access", secretCipher: "b2xk" }));
+		assert.deepEqual(profile.loadProfile(dir), { mode: "remote", url: origin });
+		profile.saveProfile(dir, { mode: "local", url: "" });
+		assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, "server-profile.json"), "utf8")), { mode: "local", url: origin });
+		assert.deepEqual(profile.remoteServerFromProfile(profile.loadProfile(dir)), { error: "Not in server mode." });
 	});
 
-	it("refuses a plaintext keyring, plain http, a path, and remote mode without a secret", () => {
+	it("refuses plain http, a path, credentials and remote mode without an address", () => {
 		const dir = tempDir();
-		assert.throws(() => profile.saveProfile(dir, { mode: "remote", url: origin, clientId: creds.clientId, secret: "x" }, fakeSafeStorage("basic_text")), /keyring/);
-		assert.throws(() => profile.saveProfile(dir, { mode: "remote", url: "http://learn.example.com", clientId: creds.clientId, secret: "x" }, fakeSafeStorage()), /https/);
-		assert.throws(() => profile.saveProfile(dir, { mode: "remote", url: `${origin}/app`, clientId: creds.clientId, secret: "x" }, fakeSafeStorage()), /no path/);
-		assert.throws(() => profile.saveProfile(dir, { mode: "remote", url: origin, clientId: creds.clientId }, fakeSafeStorage()), /client secret/);
+		assert.throws(() => profile.saveProfile(dir, { mode: "remote", url: "http://learnharness.tail1234.ts.net" }), /https/);
+		assert.throws(() => profile.saveProfile(dir, { mode: "remote", url: `${origin}/app` }), /no path/);
+		assert.throws(() => profile.saveProfile(dir, { mode: "remote", url: "https://u:p@learnharness.tail1234.ts.net" }), /user name/);
+		assert.throws(() => profile.saveProfile(dir, { mode: "remote" }), /server address/);
 		assert.equal(profile.normalizeServerURL("http://localhost:3000"), "http://localhost:3000");
-	});
-
-	it("imports the setup token file once, keeps the mode, and deletes the plaintext", () => {
-		const dir = tempDir();
-		const file = path.join(dir, "service-token.json");
-		fs.writeFileSync(file, JSON.stringify({ url: origin, ...creds }));
-		assert.equal(profile.importTokenFile(dir, file, fakeSafeStorage()), true);
-		assert.equal(fs.existsSync(file), false);
-		const loaded = profile.loadProfile(dir);
-		assert.equal(loaded.mode, "local");
-		assert.equal(profile.publicProfile(loaded).hasSecret, true);
-		assert.equal(profile.importTokenFile(dir, file, fakeSafeStorage()), false);
 	});
 });
 
@@ -106,28 +66,46 @@ describe("server probe", () => {
 		try { await run(`http://127.0.0.1:${(server.address() as AddressInfo).port}`); }
 		finally { server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); }
 	}
+	const json = (res: import("node:http").ServerResponse, status: number, body: unknown) => {
+		res.writeHead(status, { "content-type": "application/json" });
+		res.end(JSON.stringify(body));
+	};
 
-	it("sends the token and accepts a LearnHarness health answer", async () => {
-		let seen: string | undefined;
-		await serve((req, res) => { seen = req.headers["cf-access-client-secret"] as string; res.setHeader("content-type", "application/json"); res.end('{"ok":true}'); }, async (url) => {
-			assert.deepEqual(await probeServer(url, creds), { ok: true });
-			assert.equal(seen, creds.clientSecret);
+	it("sends no credentials and reports the accepted login", async () => {
+		const seen: Record<string, string | undefined>[] = [];
+		await serve((req, res) => {
+			seen.push({ path: req.url, authorization: req.headers.authorization, cookie: req.headers.cookie });
+			if (req.url === "/api/health") json(res, 200, { ok: true });
+			else json(res, 200, { ok: true, remote: true, login: "learner@example.com" });
+		}, async (url) => {
+			assert.deepEqual(await probeServer(url), { ok: true, login: "learner@example.com" });
+		});
+		assert.deepEqual(seen, [
+			{ path: "/api/health", authorization: undefined, cookie: undefined },
+			{ path: "/api/whoami", authorization: undefined, cookie: undefined },
+		]);
+	});
+
+	it("reports a refused identity as an auth problem, with the server's reason", async () => {
+		await serve((req, res) => {
+			if (req.url === "/api/health") json(res, 200, { ok: true });
+			else json(res, 403, { error: "The Tailscale user someone@example.com may not use this server." });
+		}, async (url) => {
+			const result = await probeServer(url);
+			assert.equal(result.reason, "auth");
+			assert.match(result.message, /someone@example\.com/);
 		});
 	});
 
-	it("reports an Access login redirect or 403 as a token problem", async () => {
-		await serve((_req, res) => { res.writeHead(302, { location: "https://team.cloudflareaccess.com/cdn-cgi/access/login" }); res.end(); }, async (url) => {
-			assert.equal((await probeServer(url, creds)).reason, "auth");
-		});
-		await serve((_req, res) => { res.writeHead(403); res.end(); }, async (url) => {
-			assert.equal((await probeServer(url, creds)).reason, "auth");
-		});
-	});
-
-	it("reports another app and a closed port", async () => {
+	it("reports another app, an HTTP error and a closed port", async () => {
 		await serve((_req, res) => { res.end("<html>hello</html>"); }, async (url) => {
-			assert.equal((await probeServer(url, creds)).reason, "not-learnharness");
+			assert.equal((await probeServer(url)).reason, "not-learnharness");
 		});
-		assert.equal((await probeServer("http://127.0.0.1:9", creds, { timeoutMs: 2000 })).reason, "network");
+		await serve((_req, res) => { res.writeHead(502); res.end(); }, async (url) => {
+			assert.equal((await probeServer(url)).reason, "http");
+		});
+		const closed = await probeServer("http://127.0.0.1:9", { timeoutMs: 2000 });
+		assert.equal(closed.reason, "network");
+		assert.match(closed.message, /Tailscale/);
 	});
 });

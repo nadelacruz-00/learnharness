@@ -25,7 +25,7 @@
  */
 
 const { app, BrowserWindow, Menu, ipcMain, nativeTheme, session, shell, dialog } = require("electron");
-const { remoteAccessHeaders, probeServer } = require("./remote-headers.cjs");
+const { probeServer } = require("./server-probe.cjs");
 const { pickAttachmentPath } = require("./attachment-picker.cjs");
 const { createChatGPT, fileStore } = require("./chatgpt.cjs");
 const { attachChatGPTChild, trustedSender, chatGPTControl } = require("./chatgpt-ipc.cjs");
@@ -679,15 +679,14 @@ function installMenu() {
 
 let resolvingServer = false;
 
-/** Fork: remote server mode. Returns the remote credentials, null for local
- * mode, or false when the user chose to quit. */
+/** Fork: remote server mode (Tailscale). Returns {url} of the remote server,
+ * null for local mode, or false when the user chose to quit. */
 async function resolveRemoteServer() {
 	const { createServerMode } = require("./server-mode.cjs");
 	serverMode = createServerMode({
 		electron: { app, BrowserWindow, ipcMain, dialog },
 		userData: app.getPath("userData"),
 		log,
-		tokenFile: path.join(app.getPath("home"), ".config", "learnharness-remote", "service-token.json"),
 		localDataDir: DATA_DIR(),
 		archiveModuleCandidates: [
 			path.join(process.resourcesPath ?? "", "data-archive.mjs"),
@@ -695,19 +694,18 @@ async function resolveRemoteServer() {
 		],
 	});
 	serverMode.registerIPC();
-	serverMode.importToken();
 	resolvingServer = true;
 	try {
 		for (;;) {
 			if (serverMode.profile().mode !== "remote") return null;
-			const creds = serverMode.credentials();
-			const probe = creds.error ? { ok: false, message: creds.error } : await probeServer(creds.url, creds);
-			if (probe.ok) return creds;
+			const server = serverMode.remoteServer();
+			const probe = server.error ? { ok: false, message: server.error } : await probeServer(server.url);
+			if (probe.ok) return server;
 			log(`server mode: cannot connect: ${probe.message}`);
 			const choice = await dialog.showMessageBox({
 				type: "error",
 				message: "LearnHarness cannot connect to your server.",
-				detail: [creds.url, probe.message].filter(Boolean).join("\n"),
+				detail: [server.url, probe.message].filter(Boolean).join("\n"),
 				buttons: ["Try Again", "Server Settings…", "Quit"], defaultId: 0, cancelId: 2,
 			});
 			if (choice.response === 1) await serverMode.openChooser(probe.message);
@@ -755,12 +753,10 @@ async function main() {
 	const devUrl = process.env.LH_DEV_URL ?? remoteServer?.url;
 	const url = devUrl ?? `http://127.0.0.1:${await freePort()}`;
 	if (remoteServer) {
-		// No local server: the window loads the remote server. The service
-		// token rides only on requests to that exact origin.
+		// No local server: the window loads the remote server over the
+		// tailnet. No credentials are added: `tailscale serve` on the server
+		// identifies this device's Tailscale user.
 		rendererArguments = ["--lh-web-subscriptions", "--lh-remote"];
-		session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ["<all_urls>"] }, (details, callback) => {
-			callback({ requestHeaders: remoteAccessHeaders(details, remoteServer.url, remoteServer) });
-		});
 		log(`server mode: connected to ${remoteServer.url}`);
 	} else if (!devUrl) {
 		desktopAPISecret = randomBytes(32).toString("hex");
@@ -834,11 +830,7 @@ async function main() {
 	// Next server may be resolved here; never accept an arbitrary external URL.
 	ipcMain.handle("lh:subscriptions:web-browser", async (event, action) => {
 		if (!devUrl || !trustedAppWindows.has(BrowserWindow.fromWebContents(event.sender)) || !trustedSender(event, new URL(url).origin, BrowserWindow)) throw new Error("Untrusted development request.");
-		await openWebSubscriptionBrowser(action, new URL(url).origin, {
-			openExternal: (target) => shell.openExternal(target),
-			// Fork: remote server mode passes Cloudflare Access with the service token.
-			...(remoteServer ? { fetch: (target, init) => fetch(target, { ...init, headers: { ...init?.headers, "CF-Access-Client-Id": remoteServer.clientId, "CF-Access-Client-Secret": remoteServer.clientSecret } }) } : {}),
-		});
+		await openWebSubscriptionBrowser(action, new URL(url).origin, { openExternal: (target) => shell.openExternal(target) });
 	});
 
 	ipcMain.handle("lh:attachment:pick", (event, mode) => pickAttachmentPath(event, mode, {

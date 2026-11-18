@@ -19,7 +19,7 @@
 	label.choice small { display: block; color: var(--muted); }
 	.field { display: grid; gap: 4px; margin: 10px 0; }
 	.field span { font-weight: 500; }
-	input[type=text], input[type=url], input[type=password] { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit; }
+	input[type=url] { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit; }
 	.hint { color: var(--muted); font-size: 12px; }
 	.row { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; margin-top: 16px; }
 	button { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); font: inherit; cursor: pointer; }
@@ -43,9 +43,7 @@
 		</fieldset>
 		<fieldset id="remote">
 			<legend>Server</legend>
-			<label class="field"><span>Server address</span><input id="url" type="url" placeholder="https://learn.example.com" spellcheck="false"></label>
-			<label class="field"><span>Cloudflare Access client ID</span><input id="clientId" type="text" placeholder="….access" spellcheck="false"></label>
-			<label class="field"><span>Cloudflare Access client secret</span><input id="secret" type="password" spellcheck="false"><span class="hint" id="secretHint"></span></label>
+			<label class="field"><span>Server address (tailnet)</span><input id="url" type="url" placeholder="https://learnharness.tail1234.ts.net" spellcheck="false"><span class="hint">Tailscale must be running on this computer, logged in as a user that the server allows. No password or token is needed.</span></label>
 		</fieldset>
 		<div id="status" role="status"></div>
 		<div class="row">

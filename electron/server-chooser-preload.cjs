@@ -1,6 +1,6 @@
 "use strict";
 // Bridge for electron/server-chooser.html only (fork: remote server mode).
-// The secret goes main-ward on save/test; nothing secret ever comes back.
+// Only the mode and the server address go main-ward; there is no secret.
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("lhServer", {
