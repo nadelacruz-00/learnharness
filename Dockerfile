@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
-# LearnHarness server image (fork: remote server mode). Runs the Next.js
-# standalone server behind a Cloudflare Tunnel + Cloudflare Access.
-# See docs/remote-server.md. Build on the target architecture: native modules
+# LearnHarness server image (fork: remote server mode, Tailscale variant).
+# Runs the Next.js standalone server on 127.0.0.1:3000 inside the network
+# namespace of a Tailscale sidecar, which serves it over HTTPS on the tailnet.
+# See docs/remote-server-tailscale.md. Build on the target architecture: native modules
 # (@napi-rs/canvas, @resvg/resvg-js, photon) are traced per build platform.
 
 # node:26-bookworm-slim, multi-arch index digest (amd64 + arm64), 2026-11-11.
@@ -24,7 +25,7 @@ RUN npm run plugins:setup \
 FROM ${NODE_IMAGE} AS runtime
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
-    HOSTNAME=0.0.0.0 \
+    HOSTNAME=127.0.0.1 \
     PORT=3000 \
     LH_SERVER_MODE=remote \
     LH_DATA_DIR=/data/data \
@@ -38,7 +39,8 @@ WORKDIR /app
 COPY --from=build --chown=root:root /app/.next/standalone ./
 USER learnharness
 VOLUME ["/data"]
-EXPOSE 3000
+# No EXPOSE: the server listens on loopback only. Remote mode refuses to
+# start with any other HOSTNAME.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD ["node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
 CMD ["node", "server.js"]

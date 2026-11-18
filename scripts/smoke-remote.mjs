@@ -1,56 +1,47 @@
 /**
- * smoke-remote.mjs (fork: remote server mode). Checks a running server in
- * remote mode from the outside, with a throwaway signing key:
+ * smoke-remote.mjs (fork: remote server mode, Tailscale variant). Checks a
+ * running server in remote mode without a tailnet. It plays the part of
+ * `tailscale serve`: it sends the `Tailscale-User-Login` header itself, so it
+ * must run where Serve runs, in the server's network namespace:
  *
- *   1. start this script: it serves a JWKS on --jwks-port and prints its URL;
- *   2. start the server with LH_CF_ACCESS_CERTS_URL=<that URL>, plus
- *      LH_CF_ACCESS_TEAM_DOMAIN / LH_CF_ACCESS_AUD matching --team / --aud;
- *   3. the script waits for /api/health, runs the checks, and exits 0 or 1.
+ *   docker run --rm --network container:<netns holder> -v "$PWD":/w -w /w \
+ *     <node image> node scripts/smoke-remote.mjs \
+ *       --login smoke@example.com --unreachable http://<holder IP>:3000
  *
- *   node scripts/smoke-remote.mjs --base http://127.0.0.1:3000 \
- *     --team smoke.cloudflareaccess.com --aud smoke-aud --jwks-port 4799
+ * The server must run with LH_SERVER_MODE=remote,
+ * LH_TAILSCALE_ALLOWED_LOGINS=<--login> and LH_PUBLIC_ORIGIN=<--origin>.
+ * --unreachable (repeatable) names URLs that must NOT answer (for example the
+ * namespace's Docker network address): the server must listen on loopback only.
  *
  * Use it only against a throwaway data volume: it imports a test chat.
  */
 import fs from "node:fs";
-import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { createArchive } from "../src/server/data-archive.mjs";
 
 const { values } = parseArgs({ options: {
 	base: { type: "string", default: "http://127.0.0.1:3000" },
-	team: { type: "string", default: "smoke.cloudflareaccess.com" },
-	aud: { type: "string", default: "smoke-aud" },
-	"jwks-port": { type: "string", default: "4799" },
-	"jwks-host": { type: "string", default: "0.0.0.0" },
+	origin: { type: "string", default: "https://learnharness.tail1234.ts.net" },
+	login: { type: "string", default: "smoke@example.com" },
+	unreachable: { type: "string", multiple: true, default: [] },
 	"wait-ms": { type: "string", default: "180000" },
 } });
 const base = values.base.replace(/\/+$/, "");
-
-const good = await generateKeyPair("RS256");
-const other = await generateKeyPair("RS256");
-const jwk = { ...(await exportJWK(good.publicKey)), kid: "smoke", alg: "RS256", use: "sig" };
-const jwks = createServer((req, res) => {
-	res.setHeader("content-type", "application/json");
-	res.end(JSON.stringify({ keys: [jwk] }));
-});
-await new Promise((resolve) => jwks.listen(Number(values["jwks-port"]), values["jwks-host"], resolve));
-console.log(`[smoke-remote] JWKS on http://${values["jwks-host"]}:${values["jwks-port"]}/certs`);
-
-const token = ({ key = good, aud = values.aud, email = "smoke@example.com" } = {}) => new SignJWT(email ? { email } : { common_name: "smoke.access" })
-	.setProtectedHeader({ alg: "RS256", kid: "smoke" })
-	.setIssuer(`https://${values.team}`).setAudience(aud).setIssuedAt().setExpirationTime("5m")
-	.sign(key.privateKey);
+const host = new URL(values.origin).host;
 
 let failures = 0;
 const check = (label, ok, detail = "") => {
 	console.log(`[smoke-remote] ${ok ? "ok  " : "FAIL"} ${label}${detail ? ` (${detail})` : ""}`);
 	if (!ok) failures++;
 };
-const get = (route, jwt, init = {}) => fetch(`${base}${route}`, { redirect: "manual", ...init, headers: { ...(jwt ? { "cf-access-jwt-assertion": jwt } : {}), ...(init.headers ?? {}) } });
+// Serve keeps the client's Host (the tailnet name); fetch cannot set Host, so
+// the requests use the base URL's host, which the server allows as an IP.
+const get = (route, login, init = {}) => fetch(`${base}${route}`, {
+	redirect: "manual", ...init,
+	headers: { ...(login ? { "tailscale-user-login": login } : {}), ...(init.headers ?? {}) },
+});
 
 // Wait for the server.
 const deadline = Date.now() + Number(values["wait-ms"]);
@@ -60,49 +51,62 @@ for (;;) {
 	await new Promise((resolve) => setTimeout(resolve, 1000));
 }
 
-try {
-	const health = await get("/api/health");
-	check("health is open", health.status === 200 && (await health.json()).ok === true, String(health.status));
+const health = await get("/api/health");
+check("health is open", health.status === 200 && (await health.json()).ok === true, String(health.status));
 
-	for (const route of ["/", "/chat/smoke", "/settings", "/api/chats", "/api/settings", "/api/data/export"]) {
-		const res = await get(route);
-		check(`no token: ${route} refused`, res.status === 403, String(res.status));
-	}
-	for (const [label, jwt] of [["wrong key", await token({ key: other })], ["wrong audience", await token({ aud: "other-app" })], ["garbage", "x.y.z"]]) {
-		const res = await get("/api/chats", jwt);
-		check(`${label}: refused`, res.status === 403, String(res.status));
-	}
+for (const route of ["/", "/chat/smoke", "/settings", "/api/chats", "/api/settings", "/api/data/export", "/api/whoami"]) {
+	const res = await get(route);
+	check(`no identity: ${route} refused`, res.status === 403, String(res.status));
+}
+for (const [label, login] of [["unknown user", "intruder@example.com"], ["lookalike user", `${values.login}.evil`], ["empty header", " "]]) {
+	const res = await get("/api/chats", login);
+	check(`${label}: refused`, res.status === 403, String(res.status));
+}
+const forwarded = await get("/api/chats", undefined, { headers: { "x-forwarded-user": values.login, "tailscale-user-name": values.login } });
+check("other identity headers: refused", forwarded.status === 403, String(forwarded.status));
 
-	const user = await token();
-	const service = await token({ email: null });
-	const page = await get("/", user);
-	check("user token: page renders", page.status === 200, String(page.status));
-	const chats = await get("/api/chats", service);
-	check("service token: API answers", chats.status === 200, String(chats.status));
+const page = await get("/", values.login.toUpperCase());
+check("allowed user (any case): page renders", page.status === 200, String(page.status));
+const whoami = await get("/api/whoami", values.login);
+const who = await whoami.json().catch(() => ({}));
+check("whoami names the caller", whoami.status === 200 && who.login === values.login.toLowerCase() && who.remote === true, `${whoami.status} ${who.login}`);
+const chats = await get("/api/chats", values.login);
+check("allowed user: API answers", chats.status === 200, String(chats.status));
 
-	const cross = await get("/api/data/import", user, { method: "POST", headers: { origin: "https://evil.example", "sec-fetch-site": "cross-site", "content-type": "application/gzip" }, body: "x" });
-	check("cross-site write refused", cross.status === 403, String(cross.status));
+const cross = await get("/api/data/import", values.login, { method: "POST", headers: { origin: "https://evil.example", "sec-fetch-site": "cross-site", "content-type": "application/gzip" }, body: "x" });
+check("cross-site write refused", cross.status === 403, String(cross.status));
+// A same-origin write from the pinned tailnet origin passes the gate; the
+// route then refuses the junk body itself (400, not 403).
+const sameOrigin = await get("/api/data/import", values.login, { method: "POST", headers: { origin: values.origin, "sec-fetch-site": "same-origin", "content-type": "application/gzip" }, body: "x" });
+check(`same-origin write from ${host} passes the gate`, sameOrigin.status === 400, String(sameOrigin.status));
 
-	// Import a one-chat archive into the (throwaway) server, then refuse a second without replace.
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lh-smoke-remote-"));
-	fs.mkdirSync(path.join(dir, "chats"));
-	fs.writeFileSync(path.join(dir, "chats", "chat_smoke.json"), JSON.stringify({ id: "chat_smoke", title: "Smoke", messages: [], createdAt: new Date().toISOString() }));
-	const archive = createArchive(dir);
-	const importOnce = (query = "") => get(`/api/data/import${query}`, service, { method: "POST", headers: { "content-type": "application/gzip" }, body: archive });
-	const first = await importOnce();
-	const firstBody = await first.json().catch(() => ({}));
-	check("import into an empty server", first.status === 200 && firstBody.ok === true, `${first.status} ${firstBody.error ?? ""}`);
-	const second = await importOnce();
-	const secondBody = await second.json().catch(() => ({}));
-	check("second import needs replace", second.status === 409 && secondBody.error === "server_has_data", `${second.status} ${secondBody.error ?? ""}`);
-	const replaced = await importOnce("?replace=1");
-	const replacedBody = await replaced.json().catch(() => ({}));
-	check("replace makes a backup", replaced.status === 200 && Boolean(replacedBody.backup), `${replaced.status} ${replacedBody.backup ?? ""}`);
-	const exported = await get("/api/data/export", service);
-	check("export returns gzip", exported.status === 200 && (exported.headers.get("content-type") ?? "").includes("gzip"), `${exported.status} ${exported.headers.get("content-type")}`);
-	fs.rmSync(dir, { recursive: true, force: true });
-} finally {
-	jwks.close();
+// Import a one-chat archive into the (throwaway) server, then refuse a second without replace.
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lh-smoke-remote-"));
+fs.mkdirSync(path.join(dir, "chats"));
+fs.writeFileSync(path.join(dir, "chats", "chat_smoke.json"), JSON.stringify({ id: "chat_smoke", title: "Smoke", messages: [], createdAt: new Date().toISOString() }));
+const archive = createArchive(dir);
+const importOnce = (query = "") => get(`/api/data/import${query}`, values.login, { method: "POST", headers: { "content-type": "application/gzip" }, body: archive });
+const first = await importOnce();
+const firstBody = await first.json().catch(() => ({}));
+check("import into an empty server", first.status === 200 && firstBody.ok === true, `${first.status} ${firstBody.error ?? ""}`);
+const second = await importOnce();
+const secondBody = await second.json().catch(() => ({}));
+check("second import needs replace", second.status === 409 && secondBody.error === "server_has_data", `${second.status} ${secondBody.error ?? ""}`);
+const replaced = await importOnce("?replace=1");
+const replacedBody = await replaced.json().catch(() => ({}));
+check("replace makes a backup", replaced.status === 200 && Boolean(replacedBody.backup), `${replaced.status} ${replacedBody.backup ?? ""}`);
+const exported = await get("/api/data/export", values.login);
+check("export returns gzip", exported.status === 200 && (exported.headers.get("content-type") ?? "").includes("gzip"), `${exported.status} ${exported.headers.get("content-type")}`);
+fs.rmSync(dir, { recursive: true, force: true });
+
+// The server must not answer on any non-loopback address.
+for (const url of values.unreachable) {
+	let answered = "";
+	try {
+		const res = await fetch(`${url.replace(/\/+$/, "")}/api/health`, { signal: AbortSignal.timeout(3000) });
+		answered = `HTTP ${res.status}`;
+	} catch { /* refused or timed out: good */ }
+	check(`not reachable at ${url}`, !answered, answered || "connection failed");
 }
 
 console.log(failures ? `[smoke-remote] ${failures} check(s) failed` : "[smoke-remote] all checks passed");

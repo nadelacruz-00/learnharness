@@ -9,6 +9,7 @@ data/
 # Local environment secrets; example templates may be committed.
 .env
 .env.*
+app.env
 !.env.example
 !.env.*.example
 .memory/
